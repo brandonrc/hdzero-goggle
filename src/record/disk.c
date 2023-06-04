@@ -390,6 +390,8 @@ void sdcard_check(SdcardContext_t* sdstat, uint32_t tkNow)
     bool mbFileSystem = false;
     const int MAX_REPAIR_TRIES = 3;
     int repairTries = 0;
+    
+    mbInserted = disk_insterted();
 
     if (mbInserted) {
         mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
