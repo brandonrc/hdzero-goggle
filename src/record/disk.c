@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/wait.h>
+#include <unistd.h>  
 
 #include <log/log.h>
 
@@ -99,16 +100,23 @@ bool disk_checkAndRepair(void)
 {
     const char* device = "/dev/mmcblk0";
 
+    // The path to the fsck program
+    const char* fsckPath = "/sbin/fsck";
+
+    // Check if the fsck tool exists and is executable
+    if (access(fsckPath, X_OK) != 0) {
+        LOGE("fsck tool not found or not executable at %s\n", fsckPath);
+        return false;
+    }
+
     // Create a child process
     int pid = fork();
     if (pid < 0) {
         // Fork failed
+        LOGE("Failed to create child process\n");
         return false;
     } else if (pid == 0) {
         // This is executed by the child process
-
-        // The path to the fsck program
-        const char* fsckPath = "/sbin/fsck";
 
         // Arguments to pass to fsck
         char* const fsckArgs[] = {"/sbin/fsck", "-y", (char*) device, NULL};
@@ -117,6 +125,7 @@ bool disk_checkAndRepair(void)
         execv(fsckPath, fsckArgs);
 
         // If execv returns at all, there was an error
+        LOGE("Failed to execute fsck tool\n");
         exit(EXIT_FAILURE);
     } else {
         // This is executed by the parent process
@@ -129,17 +138,21 @@ bool disk_checkAndRepair(void)
             // The child process exited normally, so check its exit code
             if (WEXITSTATUS(status) == 0) {
                 // fsck exited successfully, so the file system is fine (or has been repaired)
+                LOGI("File system check and repair completed successfully\n");
                 return true;
             } else {
                 // fsck found errors it could not fix
+                LOGE("File system check found unfixable errors\n");
                 return false;
             }
         } else {
             // The child process did not exit normally, so something went wrong
+            LOGE("File system check did not complete normally\n");
             return false;
         }
     }
 }
+
 
 /***********************************************************
  * check the path
@@ -355,11 +368,26 @@ void sdcard_check(SdcardContext_t* sdstat, uint32_t tkNow)
 	bool mbInserted = false;
 	bool mbUpdated = false;
 	bool mbSizeUpdated = false;
+    
+    // Check and repair vars
     bool mbFileSystem = false;
+    const int MAX_REPAIR_TRIES = 3;
+    int repairTries = 0;
 
-	mbInserted = disk_insterted();
-    mbFileSystem = disk_checkAndRepair();
-    mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
+    if (mbInserted) {
+        mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
+
+        while (!mbMounted && repairTries < MAX_REPAIR_TRIES) {
+            mbFileSystem = disk_checkAndRepair();
+
+            if (!mbFileSystem) {
+                LOGE("Failed to repair disk file system, attempt %d of %d", repairTries+1, MAX_REPAIR_TRIES);
+            }
+
+            mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
+            repairTries++;
+        }
+    }
 
     if(sdstat->inserted != mbInserted) {
         sdstat->inserted = mbInserted;
