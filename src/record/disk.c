@@ -10,6 +10,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sys/wait.h>
 
 #include <log/log.h>
 
@@ -88,6 +89,56 @@ bool disk_mounted(char* sPath, uint32_t* mbTotal, uint32_t* mbAvail)
     *mbTotal = 0;
 
     return false;
+}
+
+/***********************************************************
+ * check for corrupted filesystem on sdcard
+ * 
+***********************************************************/
+bool disk_checkAndRepair(void)
+{
+    const char* device = "/dev/mmcblk0";
+
+    // Create a child process
+    int pid = fork();
+    if (pid < 0) {
+        // Fork failed
+        return false;
+    } else if (pid == 0) {
+        // This is executed by the child process
+
+        // The path to the fsck program
+        const char* fsckPath = "/sbin/fsck";
+
+        // Arguments to pass to fsck
+        char* const fsckArgs[] = {"/sbin/fsck", "-y", (char*) device, NULL};
+
+        // Use execv to replace the child process with fsck
+        execv(fsckPath, fsckArgs);
+
+        // If execv returns at all, there was an error
+        exit(EXIT_FAILURE);
+    } else {
+        // This is executed by the parent process
+
+        // Wait for the child process to finish
+        int status;
+        waitpid(pid, &status, 0);
+
+        if (WIFEXITED(status)) {
+            // The child process exited normally, so check its exit code
+            if (WEXITSTATUS(status) == 0) {
+                // fsck exited successfully, so the file system is fine (or has been repaired)
+                return true;
+            } else {
+                // fsck found errors it could not fix
+                return false;
+            }
+        } else {
+            // The child process did not exit normally, so something went wrong
+            return false;
+        }
+    }
 }
 
 /***********************************************************
@@ -304,8 +355,10 @@ void sdcard_check(SdcardContext_t* sdstat, uint32_t tkNow)
 	bool mbInserted = false;
 	bool mbUpdated = false;
 	bool mbSizeUpdated = false;
+    bool mbFileSystem = false;
 
 	mbInserted = disk_insterted();
+    mbFileSystem = disk_checkAndRepair();
     mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
 
     if(sdstat->inserted != mbInserted) {
