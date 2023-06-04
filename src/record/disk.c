@@ -10,6 +10,8 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sys/wait.h>
+#include <unistd.h>  
 
 #include <log/log.h>
 
@@ -89,6 +91,85 @@ bool disk_mounted(char* sPath, uint32_t* mbTotal, uint32_t* mbAvail)
 
     return false;
 }
+
+/***********************************************************
+ * check for corrupted filesystem on sdcard
+ * 
+***********************************************************/
+bool disk_checkAndRepair(void)
+{
+    const char* device = "/dev/mmcblk0";
+    const char* logPath = "/tmp/fsck.log";
+
+    // Create a child process
+    int pid = fork();
+    if (pid < 0) {
+        // Fork failed
+        return false;
+    } else if (pid == 0) {
+        // This is executed by the child process
+
+        // Open the log file
+        int logFile = open(logPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (logFile < 0) {
+            exit(EXIT_FAILURE);
+        }
+
+        // Redirect stdout and stderr to the log file
+        dup2(logFile, STDOUT_FILENO);
+        dup2(logFile, STDERR_FILENO);
+
+        // Close the log file since stdout/stderr have a reference to it now
+        close(logFile);
+
+        // The path to the fsck program
+        // It would be nice to add support for other filesystem types. 
+        // Linux usually handles the .fat .ntfs .ext4
+        // Our current issue is that the system does not have these tools on the OS
+        // So we had to copy the fsck.fat binary...
+        const char* fsckPath = "/bin/fsck.fat";
+
+        // Check if the fsck tool exists and is executable
+        if (access(fsckPath, X_OK) != 0) {
+            // This is the child process, we can't use LOGE here
+            // LOGE function will send output to the parent process stdout/stderr, not the redirected ones
+            // Let's write a message to the log file directly instead
+            write(STDOUT_FILENO, "fsck tool not found or not executable\n", 38);
+            exit(EXIT_FAILURE);
+        }
+
+        // Arguments to pass to fsck
+        char* const fsckArgs[] = {(char*)fsckPath, "-y", (char*)device, NULL};
+
+        // Use execv to replace the child process with fsck
+        execv(fsckPath, fsckArgs);
+
+        // If execv returns at all, there was an error
+        exit(EXIT_FAILURE);
+    } else {
+        // This is executed by the parent process
+
+        // Wait for the child process to finish
+        int status;
+        waitpid(pid, &status, 0);
+
+        if (WIFEXITED(status)) {
+            // The child process exited normally, so check its exit code
+            if (WEXITSTATUS(status) == 0) {
+                // fsck exited successfully, so the file system is fine (or has been repaired)
+                return true;
+            } else {
+                // fsck found errors it could not fix
+                return false;
+            }
+        } else {
+            // The child process did not exit normally, so something went wrong
+            return false;
+        }
+    }
+}
+
+
 
 /***********************************************************
  * check the path
@@ -304,9 +385,26 @@ void sdcard_check(SdcardContext_t* sdstat, uint32_t tkNow)
 	bool mbInserted = false;
 	bool mbUpdated = false;
 	bool mbSizeUpdated = false;
+    
+    // Check and repair vars
+    bool mbFileSystem = false;
+    const int MAX_REPAIR_TRIES = 3;
+    int repairTries = 0;
 
-	mbInserted = disk_insterted();
-    mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
+    if (mbInserted) {
+        mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
+
+        while (!mbMounted && repairTries < MAX_REPAIR_TRIES) {
+            mbFileSystem = disk_checkAndRepair();
+
+            if (!mbFileSystem) {
+                LOGE("Failed to repair disk file system, attempt %d of %d", repairTries+1, MAX_REPAIR_TRIES);
+            }
+
+            mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
+            repairTries++;
+        }
+    }
 
     if(sdstat->inserted != mbInserted) {
         sdstat->inserted = mbInserted;
