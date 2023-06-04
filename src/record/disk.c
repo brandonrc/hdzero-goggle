@@ -391,20 +391,25 @@ void sdcard_check(SdcardContext_t* sdstat, uint32_t tkNow)
     const int MAX_REPAIR_TRIES = 3;
     int repairTries = 0;
 
-    if (mbInserted) {
-        mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
+	mbInserted = disk_insterted();
+    mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
 
-        while (!mbMounted && repairTries < MAX_REPAIR_TRIES) {
-            mbFileSystem = disk_checkAndRepair();
+    // if (mbInserted) {
+    //     mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
 
-            if (!mbFileSystem) {
-                LOGE("Failed to repair disk file system, attempt %d of %d", repairTries+1, MAX_REPAIR_TRIES);
-            }
+    //     while (!mbMounted && repairTries < MAX_REPAIR_TRIES) {
+    //         mbFileSystem = disk_checkAndRepair();
 
-            mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
-            repairTries++;
-        }
-    }
+    //         if (!mbFileSystem) {
+    //             LOGE("Failed to repair disk file system, attempt %d of %d", repairTries+1, MAX_REPAIR_TRIES);
+    //         }
+
+    //         mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
+    //         repairTries++;
+    //     }
+    // }
+    // mbMounted = disk_mounted(sdstat->path, &mbTotal, &mbAvail);
+
 
     if(sdstat->inserted != mbInserted) {
         sdstat->inserted = mbInserted;
