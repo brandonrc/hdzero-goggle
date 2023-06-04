@@ -99,33 +99,52 @@ bool disk_mounted(char* sPath, uint32_t* mbTotal, uint32_t* mbAvail)
 bool disk_checkAndRepair(void)
 {
     const char* device = "/dev/mmcblk0";
-
-    // The path to the fsck program
-    const char* fsckPath = "/sbin/fsck";
-
-    // Check if the fsck tool exists and is executable
-    if (access(fsckPath, X_OK) != 0) {
-        LOGE("fsck tool not found or not executable at %s\n", fsckPath);
-        return false;
-    }
+    const char* logPath = "/tmp/fsck.log";
 
     // Create a child process
     int pid = fork();
     if (pid < 0) {
         // Fork failed
-        LOGE("Failed to create child process\n");
         return false;
     } else if (pid == 0) {
         // This is executed by the child process
 
+        // Open the log file
+        int logFile = open(logPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (logFile < 0) {
+            exit(EXIT_FAILURE);
+        }
+
+        // Redirect stdout and stderr to the log file
+        dup2(logFile, STDOUT_FILENO);
+        dup2(logFile, STDERR_FILENO);
+
+        // Close the log file since stdout/stderr have a reference to it now
+        close(logFile);
+
+        // The path to the fsck program
+        // It would be nice to add support for other filesystem types. 
+        // Linux usually handles the .fat .ntfs .ext4
+        // Our current issue is that the system does not have these tools on the OS
+        // So we had to copy the fsck.fat binary...
+        const char* fsckPath = "/bin/fsck.fat";
+
+        // Check if the fsck tool exists and is executable
+        if (access(fsckPath, X_OK) != 0) {
+            // This is the child process, we can't use LOGE here
+            // LOGE function will send output to the parent process stdout/stderr, not the redirected ones
+            // Let's write a message to the log file directly instead
+            write(STDOUT_FILENO, "fsck tool not found or not executable\n", 38);
+            exit(EXIT_FAILURE);
+        }
+
         // Arguments to pass to fsck
-        char* const fsckArgs[] = {"/sbin/fsck", "-y", (char*) device, NULL};
+        char* const fsckArgs[] = {(char*)fsckPath, "-y", (char*)device, NULL};
 
         // Use execv to replace the child process with fsck
         execv(fsckPath, fsckArgs);
 
         // If execv returns at all, there was an error
-        LOGE("Failed to execute fsck tool\n");
         exit(EXIT_FAILURE);
     } else {
         // This is executed by the parent process
@@ -138,20 +157,18 @@ bool disk_checkAndRepair(void)
             // The child process exited normally, so check its exit code
             if (WEXITSTATUS(status) == 0) {
                 // fsck exited successfully, so the file system is fine (or has been repaired)
-                LOGI("File system check and repair completed successfully\n");
                 return true;
             } else {
                 // fsck found errors it could not fix
-                LOGE("File system check found unfixable errors\n");
                 return false;
             }
         } else {
             // The child process did not exit normally, so something went wrong
-            LOGE("File system check did not complete normally\n");
             return false;
         }
     }
 }
+
 
 
 /***********************************************************
